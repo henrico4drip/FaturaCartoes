@@ -1,0 +1,56 @@
+{
+  "name": "Transacao",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "string",
+      "format": "date",
+      "description": "Data da transa\u00e7\u00e3o"
+    },
+    "descricao": {
+      "type": "string",
+      "description": "Nome do estabelecimento/descri\u00e7\u00e3o"
+    },
+    "valor": {
+      "type": "number",
+      "description": "Valor da transa\u00e7\u00e3o"
+    },
+    "parcela_atual": {
+      "type": "number",
+      "description": "N\u00famero da parcela atual (ex: 2 de 10)"
+    },
+    "parcela_total": {
+      "type": "number",
+      "description": "Total de parcelas (ex: 10)"
+    },
+    "hash_unico": {
+      "type": "string",
+      "description": "Hash para evitar duplicatas (data+valor+descricao+parcela)"
+    },
+    "dono": {
+      "type": "string",
+      "enum": [
+        "eu",
+        "dinda",
+        "pendente"
+      ],
+      "default": "pendente",
+      "description": "Quem \u00e9 respons\u00e1vel pela transa\u00e7\u00e3o"
+    },
+    "fatura_mes_ref": {
+      "type": "string",
+      "description": "M\u00eas de refer\u00eancia da fatura (ex: 2024-01)"
+    },
+    "categoria": {
+      "type": "string",
+      "description": "Categoria da despesa"
+    }
+  },
+  "required": [
+    "data",
+    "descricao",
+    "valor",
+    "hash_unico",
+    "fatura_mes_ref"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "RegraClassificacao",
+  "type": "object",
+  "properties": {
+    "descricao_padrao": {
+      "type": "string",
+      "description": "Texto do estabelecimento (ex: NETFLIX)"
+    },
+    "dono_sugerido": {
+      "type": "string",
+      "enum": [
+        "eu",
+        "dinda"
+      ],
+      "description": "Dono sugerido para este estabelecimento"
+    },
+    "categoria": {
+      "type": "string",
+      "description": "Categoria sugerida"
+    }
+  },
+  "required": [
+    "descricao_padrao",
+    "dono_sugerido"
+  ]
+}

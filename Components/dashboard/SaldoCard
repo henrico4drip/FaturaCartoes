@@ -1,0 +1,65 @@
+import React from "react";
+import { Card } from "@/components/ui/card";
+import { TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { motion } from "framer-motion";
+
+export default function SaldoCard({ titulo, valor, tipo, descricao, delay = 0 }) {
+  const isPositivo = valor > 0;
+  const isNegativo = valor < 0;
+  const isZero = valor === 0;
+
+  const getIcon = () => {
+    if (tipo === "gasto") return null;
+    if (isPositivo) return <TrendingDown className="w-5 h-5 text-red-500" />;
+    if (isNegativo) return <TrendingUp className="w-5 h-5 text-emerald-500" />;
+    return <Minus className="w-5 h-5 text-slate-400" />;
+  };
+
+  const getValorColor = () => {
+    if (tipo === "gasto") return "text-slate-800";
+    if (isPositivo) return "text-red-600";
+    if (isNegativo) return "text-emerald-600";
+    return "text-slate-600";
+  };
+
+  const getBgGradient = () => {
+    if (tipo === "eu") return "from-blue-50 to-blue-100/50";
+    if (tipo === "dinda") return "from-purple-50 to-purple-100/50";
+    if (tipo === "total") return "from-slate-50 to-slate-100/50";
+    return "from-white to-slate-50";
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, delay }}
+    >
+      <Card className={`relative overflow-hidden bg-gradient-to-br ${getBgGradient()} border-0 shadow-sm hover:shadow-md transition-shadow duration-300`}>
+        <div className="p-6">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-medium text-slate-500 uppercase tracking-wide">
+                {titulo}
+              </p>
+              <p className={`text-3xl font-bold mt-2 ${getValorColor()}`}>
+                R$ {Math.abs(valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              </p>
+              {descricao && (
+                <p className="text-sm text-slate-500 mt-2">{descricao}</p>
+              )}
+            </div>
+            {getIcon()}
+          </div>
+          {tipo !== "gasto" && tipo !== "total" && (
+            <div className="mt-4 pt-4 border-t border-slate-200/50">
+              <p className="text-xs text-slate-500">
+                {isPositivo ? "Deve para o próximo mês" : isNegativo ? "Crédito disponível" : "Zerado"}
+              </p>
+            </div>
+          )}
+        </div>
+      </Card>
+    </motion.div>
+  );
+}

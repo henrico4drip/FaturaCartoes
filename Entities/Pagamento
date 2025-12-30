@@ -1,0 +1,37 @@
+{
+  "name": "Pagamento",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "string",
+      "format": "date",
+      "description": "Data do pagamento"
+    },
+    "valor": {
+      "type": "number",
+      "description": "Valor pago"
+    },
+    "quem_pagou": {
+      "type": "string",
+      "enum": [
+        "eu",
+        "dinda"
+      ],
+      "description": "Quem efetuou o pagamento"
+    },
+    "mes_referencia": {
+      "type": "string",
+      "description": "M\u00eas de refer\u00eancia do pagamento (ex: 2024-01)"
+    },
+    "observacao": {
+      "type": "string",
+      "description": "Observa\u00e7\u00f5es sobre o pagamento"
+    }
+  },
+  "required": [
+    "data",
+    "valor",
+    "quem_pagou",
+    "mes_referencia"
+  ]
+}

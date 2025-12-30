@@ -1,0 +1,41 @@
+{
+  "name": "Fechamento",
+  "type": "object",
+  "properties": {
+    "mes": {
+      "type": "string",
+      "description": "M\u00eas do fechamento (ex: 2024-01)"
+    },
+    "usuario": {
+      "type": "string",
+      "enum": [
+        "eu",
+        "dinda"
+      ],
+      "description": "Usu\u00e1rio do fechamento"
+    },
+    "total_gasto": {
+      "type": "number",
+      "description": "Total gasto no m\u00eas"
+    },
+    "total_pago": {
+      "type": "number",
+      "description": "Total pago no m\u00eas"
+    },
+    "saldo_anterior": {
+      "type": "number",
+      "description": "Saldo do m\u00eas anterior"
+    },
+    "saldo_final": {
+      "type": "number",
+      "description": "Saldo final do m\u00eas (positivo = deve, negativo = cr\u00e9dito)"
+    }
+  },
+  "required": [
+    "mes",
+    "usuario",
+    "total_gasto",
+    "total_pago",
+    "saldo_final"
+  ]
+}

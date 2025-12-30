@@ -1,0 +1,425 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { base44 } from "@/api/base44Client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FileText, CreditCard, DollarSign, TrendingUp, Loader2, Search } from "lucide-react";
+import { motion } from "framer-motion";
+
+import SaldoCard from "@/components/dashboard/SaldoCard";
+import ResumoMensal from "@/components/dashboard/ResumoMensal";
+import TransacaoItem from "@/components/transacoes/TransacaoItem";
+import FiltrosTransacoes from "@/components/transacoes/FiltrosTransacoes";
+import FaturaUploader from "@/components/upload/FaturaUploader";
+import PagamentoForm from "@/components/pagamentos/PagamentoForm";
+import PagamentosList from "@/components/pagamentos/PagamentosList";
+
+export default function Dashboard() {
+  const [mesAtual, setMesAtual] = useState(new Date().toISOString().slice(0, 7));
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [mostrarFiltros, setMostrarFiltros] = useState(false);
+  const [filtros, setFiltros] = useState({
+    busca: "",
+    dono: "todos",
+    valorMin: "",
+    valorMax: "",
+    dataInicio: "",
+    dataFim: ""
+  });
+  const queryClient = useQueryClient();
+
+  // Queries
+  const { data: transacoes = [], isLoading: loadingTransacoes } = useQuery({
+    queryKey: ["transacoes"],
+    queryFn: () => base44.entities.Transacao.list("-data"),
+  });
+
+  const { data: pagamentos = [], isLoading: loadingPagamentos } = useQuery({
+    queryKey: ["pagamentos"],
+    queryFn: () => base44.entities.Pagamento.list("-data"),
+  });
+
+  const { data: fechamentos = [] } = useQuery({
+    queryKey: ["fechamentos"],
+    queryFn: () => base44.entities.Fechamento.list("-mes"),
+  });
+
+  const { data: regras = [] } = useQuery({
+    queryKey: ["regras"],
+    queryFn: () => base44.entities.RegraClassificacao.list(),
+  });
+
+  // Mutations
+  const createTransacao = useMutation({
+    mutationFn: (data) => base44.entities.Transacao.create(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["transacoes"] }),
+  });
+
+  const updateTransacao = useMutation({
+    mutationFn: ({ id, data }) => base44.entities.Transacao.update(id, data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["transacoes"] }),
+  });
+
+  const createPagamento = useMutation({
+    mutationFn: (data) => base44.entities.Pagamento.create(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pagamentos"] }),
+  });
+
+  const deletePagamento = useMutation({
+    mutationFn: (id) => base44.entities.Pagamento.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pagamentos"] }),
+  });
+
+  const createRegra = useMutation({
+    mutationFn: (data) => base44.entities.RegraClassificacao.create(data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["regras"] }),
+  });
+
+  // Filtrar transações e pagamentos por mês
+  const transacoesMes = useMemo(() => {
+    return transacoes.filter(t => t.fatura_mes_ref === mesAtual);
+  }, [transacoes, mesAtual]);
+
+  // Aplicar filtros de pesquisa
+  const transacoesFiltradas = useMemo(() => {
+    let resultado = [...transacoesMes];
+
+    // Filtro por busca (descrição)
+    if (filtros.busca) {
+      resultado = resultado.filter(t =>
+        t.descricao.toLowerCase().includes(filtros.busca.toLowerCase())
+      );
+    }
+
+    // Filtro por dono
+    if (filtros.dono !== "todos") {
+      resultado = resultado.filter(t => t.dono === filtros.dono);
+    }
+
+    // Filtro por valor mínimo
+    if (filtros.valorMin) {
+      resultado = resultado.filter(t => t.valor >= parseFloat(filtros.valorMin));
+    }
+
+    // Filtro por valor máximo
+    if (filtros.valorMax) {
+      resultado = resultado.filter(t => t.valor <= parseFloat(filtros.valorMax));
+    }
+
+    // Filtro por data início
+    if (filtros.dataInicio) {
+      resultado = resultado.filter(t => t.data >= filtros.dataInicio);
+    }
+
+    // Filtro por data fim
+    if (filtros.dataFim) {
+      resultado = resultado.filter(t => t.data <= filtros.dataFim);
+    }
+
+    return resultado;
+  }, [transacoesMes, filtros]);
+
+  const pagamentosMes = useMemo(() => {
+    return pagamentos.filter(p => p.mes_referencia === mesAtual);
+  }, [pagamentos, mesAtual]);
+
+  // Calcular totais
+  const calculos = useMemo(() => {
+    const totalFatura = transacoesMes.reduce((sum, t) => sum + (t.valor || 0), 0);
+    const parteEu = transacoesMes
+      .filter(t => t.dono === "eu")
+      .reduce((sum, t) => sum + (t.valor || 0), 0);
+    const parteDinda = transacoesMes
+      .filter(t => t.dono === "dinda")
+      .reduce((sum, t) => sum + (t.valor || 0), 0);
+    const pendentes = transacoesMes.filter(t => t.dono === "pendente").length;
+
+    const pagoEu = pagamentosMes
+      .filter(p => p.quem_pagou === "eu")
+      .reduce((sum, p) => sum + (p.valor || 0), 0);
+    const pagoDinda = pagamentosMes
+      .filter(p => p.quem_pagou === "dinda")
+      .reduce((sum, p) => sum + (p.valor || 0), 0);
+
+    // Buscar saldo anterior
+    const mesAnterior = getMesAnterior(mesAtual);
+    const fechamentoAnteriorEu = fechamentos.find(
+      f => f.mes === mesAnterior && f.usuario === "eu"
+    );
+    const fechamentoAnteriorDinda = fechamentos.find(
+      f => f.mes === mesAnterior && f.usuario === "dinda"
+    );
+
+    const saldoAnteriorEu = fechamentoAnteriorEu?.saldo_final || 0;
+    const saldoAnteriorDinda = fechamentoAnteriorDinda?.saldo_final || 0;
+
+    // Saldo = Anterior + Gastos - Pago
+    const saldoAtualEu = saldoAnteriorEu + parteEu - pagoEu;
+    const saldoAtualDinda = saldoAnteriorDinda + parteDinda - pagoDinda;
+
+    return {
+      totalFatura,
+      parteEu,
+      parteDinda,
+      pendentes,
+      pagoEu,
+      pagoDinda,
+      saldoAnteriorEu,
+      saldoAnteriorDinda,
+      saldoAtualEu,
+      saldoAtualDinda
+    };
+  }, [transacoesMes, pagamentosMes, fechamentos, mesAtual]);
+
+  // Obter meses disponíveis
+  const mesesDisponiveis = useMemo(() => {
+    const meses = new Set();
+    transacoes.forEach(t => t.fatura_mes_ref && meses.add(t.fatura_mes_ref));
+    pagamentos.forEach(p => p.mes_referencia && meses.add(p.mes_referencia));
+    meses.add(mesAtual);
+    return Array.from(meses).sort().reverse();
+  }, [transacoes, pagamentos, mesAtual]);
+
+  function getMesAnterior(mes) {
+    const [ano, mesNum] = mes.split("-").map(Number);
+    const novoMes = mesNum === 1 ? 12 : mesNum - 1;
+    const novoAno = mesNum === 1 ? ano - 1 : ano;
+    return `${novoAno}-${String(novoMes).padStart(2, "0")}`;
+  }
+
+  // Handler para upload de fatura
+  const handleUploadSuccess = async (transacoesExtraidas, mesRef) => {
+    for (const t of transacoesExtraidas) {
+      const hash = `${t.data}_${t.valor}_${t.descricao}_${t.parcela_atual || 0}`;
+      
+      // Verificar duplicata
+      const existe = transacoes.find(existing => existing.hash_unico === hash);
+      if (existe) continue;
+
+      // Verificar regra de classificação
+      const regra = regras.find(r => 
+        t.descricao.toLowerCase().includes(r.descricao_padrao.toLowerCase())
+      );
+
+      await createTransacao.mutateAsync({
+        ...t,
+        hash_unico: hash,
+        fatura_mes_ref: mesRef,
+        dono: regra?.dono_sugerido || "pendente",
+        categoria: regra?.categoria || ""
+      });
+    }
+  };
+
+  // Handler para classificar transação
+  const handleClassificar = async (id, dono) => {
+    const transacao = transacoes.find(t => t.id === id);
+    await updateTransacao.mutateAsync({ id, data: { dono } });
+
+    // Criar/atualizar regra de classificação
+    const existeRegra = regras.find(
+      r => r.descricao_padrao.toLowerCase() === transacao.descricao.toLowerCase()
+    );
+    if (!existeRegra) {
+      await createRegra.mutateAsync({
+        descricao_padrao: transacao.descricao,
+        dono_sugerido: dono
+      });
+    }
+  };
+
+  // Handler para editar transação
+  const handleEditTransacao = async (id, data) => {
+    await updateTransacao.mutateAsync({ id, data });
+  };
+
+  // Handler para limpar filtros
+  const handleLimparFiltros = () => {
+    setFiltros({
+      busca: "",
+      dono: "todos",
+      valorMin: "",
+      valorMax: "",
+      dataInicio: "",
+      dataFim: ""
+    });
+  };
+
+  const formatMes = (mes) => {
+    const [ano, mesNum] = mes.split("-");
+    const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", 
+                   "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    return `${meses[parseInt(mesNum) - 1]} ${ano}`;
+  };
+
+  const isLoading = loadingTransacoes || loadingPagamentos;
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8"
+        >
+          <h1 className="text-3xl font-bold text-slate-800">Eu & Dinda</h1>
+          <p className="text-slate-500 mt-1">Gestão compartilhada de cartão de crédito</p>
+        </motion.div>
+
+        {/* Seletor de Mês */}
+        <div className="flex items-center gap-4 mb-6">
+          <Select value={mesAtual} onValueChange={setMesAtual}>
+            <SelectTrigger className="w-56 bg-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {mesesDisponiveis.map(mes => (
+                <SelectItem key={mes} value={mes}>
+                  {formatMes(mes)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {calculos.pendentes > 0 && (
+            <span className="text-sm text-amber-600 bg-amber-50 px-3 py-1 rounded-full">
+              {calculos.pendentes} pendente{calculos.pendentes > 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+
+        {/* Tabs */}
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+          <TabsList className="bg-white shadow-sm p-1 rounded-xl">
+            <TabsTrigger value="dashboard" className="rounded-lg">
+              <TrendingUp className="w-4 h-4 mr-2" />
+              Resumo
+            </TabsTrigger>
+            <TabsTrigger value="transacoes" className="rounded-lg">
+              <FileText className="w-4 h-4 mr-2" />
+              Transações
+            </TabsTrigger>
+            <TabsTrigger value="pagamentos" className="rounded-lg">
+              <DollarSign className="w-4 h-4 mr-2" />
+              Pagamentos
+            </TabsTrigger>
+            <TabsTrigger value="importar" className="rounded-lg">
+              <CreditCard className="w-4 h-4 mr-2" />
+              Importar
+            </TabsTrigger>
+          </TabsList>
+
+          {/* Dashboard */}
+          <TabsContent value="dashboard" className="space-y-6">
+            {isLoading ? (
+              <div className="flex justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
+              </div>
+            ) : (
+              <>
+                <ResumoMensal
+                  mesAtual={mesAtual}
+                  totalFatura={calculos.totalFatura}
+                  parteEu={calculos.parteEu}
+                  parteDinda={calculos.parteDinda}
+                />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <SaldoCard
+                    titulo="Meu Saldo"
+                    valor={calculos.saldoAtualEu}
+                    tipo="eu"
+                    descricao={`Pago: R$ ${calculos.pagoEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                    delay={0.2}
+                  />
+                  <SaldoCard
+                    titulo="Saldo da Dinda"
+                    valor={calculos.saldoAtualDinda}
+                    tipo="dinda"
+                    descricao={`Pago: R$ ${calculos.pagoDinda.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                    delay={0.3}
+                  />
+                </div>
+              </>
+            )}
+          </TabsContent>
+
+          {/* Transações */}
+          <TabsContent value="transacoes" className="space-y-4">
+            <FiltrosTransacoes
+              filtros={filtros}
+              setFiltros={setFiltros}
+              onLimpar={handleLimparFiltros}
+              mostrarFiltros={mostrarFiltros}
+              setMostrarFiltros={setMostrarFiltros}
+            />
+
+            <div className="space-y-3">
+              {isLoading ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
+                </div>
+              ) : transacoesMes.length === 0 ? (
+                <div className="text-center py-12 text-slate-500">
+                  <FileText className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                  <p>Nenhuma transação neste mês.</p>
+                  <p className="text-sm mt-1">Importe uma fatura para começar.</p>
+                </div>
+              ) : transacoesFiltradas.length === 0 ? (
+                <div className="text-center py-12 text-slate-500">
+                  <Search className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                  <p>Nenhuma transação encontrada com esses filtros.</p>
+                  <Button
+                    variant="link"
+                    onClick={handleLimparFiltros}
+                    className="mt-2"
+                  >
+                    Limpar filtros
+                  </Button>
+                </div>
+              ) : (
+                transacoesFiltradas.map((transacao) => (
+                  <TransacaoItem
+                    key={transacao.id}
+                    transacao={transacao}
+                    onClassificar={handleClassificar}
+                    onEdit={handleEditTransacao}
+                    isLoading={updateTransacao.isPending}
+                  />
+                ))
+              )}
+            </div>
+          </TabsContent>
+
+          {/* Pagamentos */}
+          <TabsContent value="pagamentos" className="space-y-6">
+            <PagamentoForm
+              onSave={(data) => createPagamento.mutate(data)}
+              isLoading={createPagamento.isPending}
+            />
+            <div>
+              <h3 className="text-lg font-semibold text-slate-800 mb-4">
+                Pagamentos de {formatMes(mesAtual)}
+              </h3>
+              <PagamentosList
+                pagamentos={pagamentosMes}
+                onDelete={(id) => deletePagamento.mutate(id)}
+                isLoading={deletePagamento.isPending}
+              />
+            </div>
+          </TabsContent>
+
+          {/* Importar */}
+          <TabsContent value="importar">
+            <FaturaUploader
+              onUploadSuccess={handleUploadSuccess}
+              mesReferencia={mesAtual}
+              setMesReferencia={setMesAtual}
+            />
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
+  );
+}
