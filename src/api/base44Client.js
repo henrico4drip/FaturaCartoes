@@ -9,31 +9,142 @@ function parseSort(sort) {
 
 async function list(table, sort) {
   if (!hasSupabaseConfig) return []
-  const { column, ascending } = parseSort(sort)
-  const { data, error } = await supabase.from(table).select('*').order(column, { ascending })
-  if (error) throw error
-  return data || []
+  try {
+    const { column, ascending } = parseSort(sort)
+    const { data, error } = await supabase.from(table).select('*').order(column, { ascending })
+    if (error) throw error
+    return data || []
+  } catch (e) {
+    console.error(`Erro ao listar ${table}:`, e?.message || e)
+    return []
+  }
 }
 
 async function create(table, payload) {
   if (!hasSupabaseConfig) return payload
-  const { data, error } = await supabase.from(table).insert(payload).select().single()
-  if (error) throw error
-  return data
+  try {
+    let toInsert = payload
+    if (table === 'transacoes') {
+      const iso = /^\d{4}-\d{2}-\d{2}$/
+      const dmy = /^\d{2}\/\d{2}\/\d{4}$/
+      const dm = /^\d{2}\/\d{2}$/
+      const mesRef = (payload.fatura_mes_ref || '').trim()
+      function fixDate(raw) {
+        if (!raw) return mesRef ? `${mesRef}-01` : null
+        const s = String(raw).trim()
+        if (iso.test(s)) return s
+        if (dmy.test(s)) {
+          const [dd, mm, yyyy] = s.split('/')
+          return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+        }
+        if (dm.test(s) && mesRef) {
+          const [yyyy, mmRef] = mesRef.split('-')
+          const [dd, mm] = s.split('/')
+          const finalMonth = (mm || mmRef).padStart(2, '0')
+          return `${yyyy}-${finalMonth}-${dd.padStart(2, '0')}`
+        }
+        return s
+      }
+      function ensureIso(str) {
+        const s = String(str || '').trim()
+        if (iso.test(s)) return s
+        if (dm.test(s) && mesRef) {
+          const [yyyy, mmRef] = mesRef.split('-')
+          const [dd, mm] = s.split('/')
+          const finalMonth = (mm || mmRef).padStart(2, '0')
+          return `${yyyy}-${finalMonth}-${dd.padStart(2, '0')}`
+        }
+        if (dmy.test(s)) {
+          const [dd, mm, yyyy] = s.split('/')
+          return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+        }
+        return mesRef ? `${mesRef}-01` : '1970-01-01'
+      }
+      function normMoney(v) {
+        if (v == null) return 0
+        let s = String(v).trim()
+        s = s.replace(/\s+/g, '')
+        // Remove tudo exceto dígitos e separadores , .
+        s = s.replace(/[^0-9,.\-]/g, '')
+        const hasComma = s.includes(',')
+        const hasDot = s.includes('.')
+        if (hasComma && hasDot) {
+          // Formato tipo 1.234,56 -> remove milhares e troca vírgula por ponto
+          s = s.replace(/\./g, '').replace(',', '.')
+        } else if (hasComma && !hasDot) {
+          // Formato 1234,56 -> vírgula vira ponto
+          s = s.replace(',', '.')
+        }
+        return parseFloat(s) || 0
+      }
+      toInsert = {
+        ...payload,
+        data: ensureIso(fixDate(payload.data)),
+        valor: normMoney(payload.valor),
+        parcela_atual: (payload.parcela_atual === null || payload.parcela_atual === undefined) ? null : Number(payload.parcela_atual),
+        parcela_total: (payload.parcela_total === null || payload.parcela_total === undefined) ? null : Number(payload.parcela_total),
+      }
+      if (!toInsert.hash_unico) {
+        const pAtual = toInsert.parcela_atual || 0
+        toInsert.hash_unico = `${toInsert.data}_${toInsert.valor}_${toInsert.descricao}_${pAtual}`
+      }
+      try {
+        const { data, error } = await supabase
+          .from(table)
+          .upsert(toInsert, { onConflict: 'hash_unico', ignoreDuplicates: true })
+          .select()
+          .maybeSingle()
+        if (error) throw error
+        return data || toInsert
+      } catch (err) {
+        if (err?.code === '42P10') {
+          const { data: existing } = await supabase.from(table).select('*').eq('hash_unico', toInsert.hash_unico).maybeSingle()
+          if (existing) return existing
+          const { data, error } = await supabase.from(table).insert(toInsert).select().single()
+          if (error) throw error
+          return data
+        }
+        throw err
+      }
+    } else {
+      if (table === 'faturas') {
+        // Faturas usa mes_referencia como PK, então create deve ser um upsert
+        const { data, error } = await supabase.from(table).upsert(toInsert).select().single()
+        if (error) throw error
+        return data
+      }
+      const { data, error } = await supabase.from(table).insert(toInsert).select().single()
+      if (error) throw error
+      return data
+    }
+  } catch (e) {
+    console.error(`Erro ao criar em ${table}:`, e?.message || e)
+    throw e
+  }
 }
 
 async function update(table, id, payload) {
   if (!hasSupabaseConfig) return { id, ...payload }
-  const { data, error } = await supabase.from(table).update(payload).eq('id', id).select().single()
-  if (error) throw error
-  return data
+  try {
+    const { data, error } = await supabase.from(table).update(payload).eq('id', id).select().maybeSingle()
+    if (error) throw error
+    return data
+  } catch (e) {
+    console.error(`Erro ao atualizar ${table}:${id}:`, e?.message || e)
+    throw e
+  }
 }
 
 async function remove(table, id) {
   if (!hasSupabaseConfig) return true
-  const { error } = await supabase.from(table).delete().eq('id', id)
-  if (error) throw error
-  return true
+  try {
+    const { error } = await supabase.from(table).delete().eq('id', id)
+    if (error) throw error
+    return true
+  } catch (e) {
+    console.error(`Erro ao deletar ${table}:${id}:`, e?.message || e)
+    throw e
+  }
 }
 
 export const base44 = {
@@ -79,6 +190,12 @@ export const base44 = {
       create: (payload) => create('saques', payload),
       update: (id, payload) => update('saques', id, payload),
       delete: (id) => remove('saques', id),
+    },
+    Fatura: {
+      list: (sort) => list('faturas', sort),
+      create: (payload) => create('faturas', payload),
+      update: (id, payload) => update('faturas', id, payload),
+      delete: (id) => remove('faturas', id),
     }
   },
   integrations: {

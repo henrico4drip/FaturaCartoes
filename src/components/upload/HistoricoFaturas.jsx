@@ -1,10 +1,10 @@
 import React from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Trash2, Calendar, FileText, ChevronRight } from "lucide-react";
+import { Trash2, Calendar, FileText, ChevronRight, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 
-export default function HistoricoFaturas({ meses, totalTransacoes, onDeleteMonth, isLoading }) {
+export default function HistoricoFaturas({ meses, totalTransacoes, onDeleteMonth, onReanalyzeMonth, isLoading }) {
     const formatMes = (mes) => {
         const [ano, mesNum] = mes.split("-");
         const mesesNomes = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun",
@@ -50,6 +50,16 @@ export default function HistoricoFaturas({ meses, totalTransacoes, onDeleteMonth
                                     </div>
                                 </div>
 
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => onReanalyzeMonth(mes)}
+                                    disabled={isLoading}
+                                    className="text-slate-400 hover:text-blue-500 hover:bg-blue-50"
+                                    title="Reanalisar (apagar e reimportar)"
+                                >
+                                    <RefreshCw className="w-4 h-4" />
+                                </Button>
                                 <Button
                                     variant="ghost"
                                     size="icon"

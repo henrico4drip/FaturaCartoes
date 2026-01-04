@@ -17,6 +17,12 @@ export default function PagamentoForm({ onSave, isLoading, mesReferenciaDefault 
     observacao: ""
   });
 
+  React.useEffect(() => {
+    if (mesReferenciaDefault) {
+      setForm(prev => ({ ...prev, mes_referencia: mesReferenciaDefault }));
+    }
+  }, [mesReferenciaDefault]);
+
   // Sincroniza o mês de referência se mudar no dashboard
   React.useEffect(() => {
     if (mesReferenciaDefault) {
