@@ -80,12 +80,14 @@ export default function Dashboard() {
   });
 
   const deleteTransacaoMes = useMutation({
-    mutationFn: async (mes) => {
-      await base44.entities.Transacao.deleteByMonth(mes);
-      try {
-        await base44.entities.Fatura.delete(mes);
-      } catch (e) {
-        console.warn("Fatura meta not found or couldn't be deleted:", e);
+    mutationFn: async ({ mes, arquivo_nome }) => {
+      await base44.entities.Transacao.deleteByMonth(mes, arquivo_nome);
+      if (!arquivo_nome) {
+        try {
+          await base44.entities.Fatura.delete(mes);
+        } catch (e) {
+          console.warn("Fatura meta not found or couldn't be deleted:", e);
+        }
       }
     },
     onSuccess: () => {
@@ -304,8 +306,10 @@ export default function Dashboard() {
       const sqDi = saquesM.filter(s => s.quem_pagou === "dinda").reduce((sum, s) => sum + (s.valor || 0), 0);
 
       // Lógica de Pagamento Efetivo para o histórico
-      const pgEfetivoEu = pgEu + sqDi - sqEu;
-      const pgEfetivoDi = pgDi + sqEu; // Cartão é da Dinda, ela não desconta o que ela mesma pega
+      // Eu: O que paguei - O que peguei de dinheiro do outro
+      const pgEfetivoEu = pgEu - sqEu;
+      // Dinda: O que pagou no banco - O que ela mesma pegou de dinheiro
+      const pgEfetivoDi = pgDi - sqDi;
 
       saldoAcumuladoEu += pEu - pgEfetivoEu;
       saldoAcumuladoDinda += pDi - pgEfetivoDi;
@@ -356,13 +360,13 @@ export default function Dashboard() {
       .filter(t => t.parcela_atual && t.parcela_total && t.parcela_atual === t.parcela_total)
       .reduce((sum, t) => sum + (t.valor || 0), 0);
 
-    // Soma o crédito do mês passado apenas para "Eu"
-    const pagoEfetivoEu = pagoEu + saqueDinda - saqueEu + creditoAnteriorEu;
-    const pagoEfetivoDinda = pagoDinda + saqueEu;
+    // Soma o crédito do mês passado
+    const pagoEfetivoEu = pagoEu - saqueEu + creditoAnteriorEu;
+    const pagoEfetivoDinda = pagoDinda - saqueDinda + creditoAnteriorDinda;
 
-    // Saldo atual de "Eu" considera o acumulado. O da Dinda apenas o mês atual.
-    const saldoAtualEu = dividaAnteriorEu + parteEu - (pagoEu + saqueDinda - saqueEu + creditoAnteriorEu);
-    const saldoAtualDinda = parteDinda - (pagoDinda + saqueEu);
+    // Saldo atual: (Dívida Acumulada + Gasto no Mês) - (Pagamento Efetivo)
+    const saldoAtualEu = dividaAnteriorEu + parteEu - pagoEfetivoEu;
+    const saldoAtualDinda = dividaAnteriorDinda + parteDinda - pagoEfetivoDinda;
 
     return {
       totalFatura,
@@ -418,9 +422,22 @@ export default function Dashboard() {
   }, [transacoes, pagamentos, saques, mesAtual]);
 
   const faturasImportadas = useMemo(() => {
-    const meses = new Set();
-    transacoes.forEach(t => t.fatura_mes_ref && meses.add(t.fatura_mes_ref));
-    return Array.from(meses).sort().reverse();
+    const imports = [];
+    const seen = new Set();
+    // Ordena transações para garantir ordem consistente no histórico
+    const trans = [...transacoes].sort((a, b) => b.data.localeCompare(a.data));
+
+    trans.forEach(t => {
+      const mes = t.fatura_mes_ref;
+      const arquivo = t.arquivo_nome || "Arquivo não registrado";
+      if (!mes) return;
+      const key = `${mes}_${arquivo}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        imports.push({ mes, arquivo_nome: t.arquivo_nome });
+      }
+    });
+    return imports; // Já está ordenado por data descendente (pelas transacoes)
   }, [transacoes]);
 
   const resumoPorMes = useMemo(() => {
@@ -617,6 +634,7 @@ export default function Dashboard() {
             parcela_atual: nextParcela,
             parcela_total: tInst.parcela_total,
             fatura_mes_ref: nextMesRef,
+            arquivo_nome: tInst.arquivo_nome,
             dono: tInst.dono,
             categoria: tInst.categoria,
             hash_unico: hashProj
@@ -670,6 +688,7 @@ export default function Dashboard() {
               parcela_total: parcelaTotal,
               hash_unico: hash,
               fatura_mes_ref: mesRef,
+              arquivo_nome: fileName,
               dono: regra?.dono_sugerido || "pendente",
               categoria: regra?.categoria || ""
             });
@@ -693,6 +712,7 @@ export default function Dashboard() {
           parcela_total: parcelaTotal,
           hash_unico: hash,
           fatura_mes_ref: mesRef,
+          arquivo_nome: fileName,
           dono: regra?.dono_sugerido || "pendente",
           categoria: regra?.categoria || ""
         });
@@ -892,7 +912,7 @@ export default function Dashboard() {
               <button
                 onClick={() => {
                   if (window.confirm(`TEM CERTEZA? Isso apagará TODAS as transações de ${formatMes(mesAtual)}. O arquivo da fatura continuará no Storage, mas os dados sumirão do painel.`)) {
-                    deleteTransacaoMes.mutate(mesAtual);
+                    deleteTransacaoMes.mutate({ mes: mesAtual });
                   }
                 }}
                 disabled={deleteTransacaoMes.isPending}
@@ -977,14 +997,32 @@ export default function Dashboard() {
                     valor={calculos.saldoAtualEu}
                     tipo="eu"
                     descricao={
-                      <>
-                        Pago Efetivo: R$ {calculos.pagoEfetivoEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      <div className="space-y-1 mt-2 border-t border-blue-100 pt-2">
+                        <div className="flex justify-between text-[10px] text-blue-600">
+                          <span>Gasto no Cartão:</span>
+                          <span className="font-medium">R$ {calculos.parteEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-blue-600">
+                          <span>Dinheiro Pego (+):</span>
+                          <span className="font-medium">R$ {calculos.saqueEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-emerald-600">
+                          <span>Pagamento Realizado (-):</span>
+                          <span className="font-medium">R$ {calculos.pagoEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
                         {calculos.creditoAnteriorEu > 0 && (
-                          <span className="block text-[10px] text-emerald-500 font-medium">
-                            (+ R$ {calculos.creditoAnteriorEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de crédito anterior)
-                          </span>
+                          <div className="flex justify-between text-[10px] text-emerald-600 font-bold">
+                            <span>Crédito Anterior (-):</span>
+                            <span>R$ {calculos.creditoAnteriorEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                          </div>
                         )}
-                      </>
+                        {calculos.dividaAnteriorEu > 0 && (
+                          <div className="flex justify-between text-[10px] text-red-600 font-bold">
+                            <span>Dívida Anterior (+):</span>
+                            <span>R$ {calculos.dividaAnteriorEu.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                          </div>
+                        )}
+                      </div>
                     }
                     delay={0.2}
                   />
@@ -993,14 +1031,20 @@ export default function Dashboard() {
                     valor={calculos.saldoAtualDinda}
                     tipo="dinda"
                     descricao={
-                      <>
-                        Pago Efetivo: R$ {calculos.pagoEfetivoDinda.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                        {calculos.creditoAnteriorDinda > 0 && (
-                          <span className="block text-[10px] text-emerald-500 font-medium">
-                            (+ R$ {calculos.creditoAnteriorDinda.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} de crédito anterior)
-                          </span>
-                        )}
-                      </>
+                      <div className="space-y-1 mt-2 border-t border-purple-100 pt-2">
+                        <div className="flex justify-between text-[10px] text-purple-600">
+                          <span>Gasto no Cartão:</span>
+                          <span className="font-medium">R$ {calculos.parteDinda.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-purple-600">
+                          <span>Dinheiro Pego (+):</span>
+                          <span className="font-medium">R$ {calculos.saqueDinda.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                        <div className="flex justify-between text-[10px] text-emerald-600">
+                          <span>Pagamento ao Banco (-):</span>
+                          <span className="font-medium">R$ {calculos.pagoDinda.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                        </div>
+                      </div>
                     }
                     delay={0.3}
                   />
@@ -1241,10 +1285,11 @@ export default function Dashboard() {
               setMesReferencia={setMesAtual}
             />
             <HistoricoFaturas
-              meses={faturasImportadas}
+              faturas={faturasImportadas}
               totalTransacoes={transacoes}
-              faturasDb={faturasDb}
-              onDeleteMonth={(mes) => deleteTransacaoMes.mutate(mes)}
+              onDeleteImport={({ mes, arquivo_nome }) => {
+                deleteTransacaoMes.mutate({ mes, arquivo_nome });
+              }}
               isLoading={deleteTransacaoMes.isPending}
             />
           </TabsContent>

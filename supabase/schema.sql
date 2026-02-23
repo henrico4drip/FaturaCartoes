@@ -8,6 +8,7 @@ create table if not exists public.transacoes (
   parcela_total int,
   hash_unico text,
   fatura_mes_ref char(7) not null, -- YYYY-MM
+  arquivo_nome text,
   dono text check (dono in ('eu','dinda','pendente')) default 'pendente',
   categoria text,
   created_at timestamp with time zone default now()

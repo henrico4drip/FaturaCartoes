@@ -154,9 +154,13 @@ export const base44 = {
       create: (payload) => create('transacoes', payload),
       update: (id, payload) => update('transacoes', id, payload),
       delete: (id) => remove('transacoes', id),
-      deleteByMonth: async (mes) => {
+      deleteByMonth: async (mes, arquivo_nome) => {
         if (!hasSupabaseConfig) return true
-        const { error } = await supabase.from('transacoes').delete().eq('fatura_mes_ref', mes)
+        let query = supabase.from('transacoes').delete().eq('fatura_mes_ref', mes)
+        if (arquivo_nome) {
+          query = query.eq('arquivo_nome', arquivo_nome)
+        }
+        const { error } = await query
         if (error) throw error
         return true
       },
