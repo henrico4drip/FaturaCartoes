@@ -80,9 +80,17 @@ export default function Dashboard() {
   });
 
   const deleteTransacaoMes = useMutation({
-    mutationFn: (mes) => base44.entities.Transacao.deleteByMonth(mes),
+    mutationFn: async (mes) => {
+      await base44.entities.Transacao.deleteByMonth(mes);
+      try {
+        await base44.entities.Fatura.delete(mes);
+      } catch (e) {
+        console.warn("Fatura meta not found or couldn't be deleted:", e);
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["transacoes"] });
+      queryClient.invalidateQueries({ queryKey: ["faturas_db"] });
     },
     onError: (error) => alert("Erro ao excluir faturas do mês: " + error.message),
   });
@@ -460,7 +468,15 @@ export default function Dashboard() {
     return `${mesRef}-01`
   }
 
-  const handleUploadSuccess = async (transacoesExtraidas, mesRef) => {
+  const handleUploadSuccess = async (transacoesExtraidas, mesRef, fileName) => {
+    // Salva o nome do arquivo na tabela de faturas
+    if (fileName) {
+      saveFatura.mutate({
+        mes_referencia: mesRef,
+        arquivo_nome: fileName
+      });
+    }
+
     const normMoney = (v) => {
       if (v == null) return 0
       let s = String(v).trim()
@@ -1227,6 +1243,7 @@ export default function Dashboard() {
             <HistoricoFaturas
               meses={faturasImportadas}
               totalTransacoes={transacoes}
+              faturasDb={faturasDb}
               onDeleteMonth={(mes) => deleteTransacaoMes.mutate(mes)}
               isLoading={deleteTransacaoMes.isPending}
             />

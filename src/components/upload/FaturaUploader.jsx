@@ -72,7 +72,7 @@ export default function FaturaUploader({ onUploadSuccess, mesReferencia, setMesR
             });
 
             if (resultado?.transacoes && resultado.transacoes.length > 0) {
-                onUploadSuccess(resultado.transacoes, mesReferencia);
+                onUploadSuccess(resultado.transacoes, mesReferencia, file.name);
                 setUploadStatus({ type: "success", message: `${resultado.transacoes.length} transações extraídas com IA` });
             } else {
                 setUploadStatus({ type: "error", message: "Nenhuma transação encontrada na fatura" });
@@ -176,8 +176,8 @@ export default function FaturaUploader({ onUploadSuccess, mesReferencia, setMesR
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, y: -10 }}
                             className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${uploadStatus.type === "success"
-                                    ? "bg-emerald-50 text-emerald-700"
-                                    : "bg-red-50 text-red-700"
+                                ? "bg-emerald-50 text-emerald-700"
+                                : "bg-red-50 text-red-700"
                                 }`}
                         >
                             {uploadStatus.type === "success" ? (
