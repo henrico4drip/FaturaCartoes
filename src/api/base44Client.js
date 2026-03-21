@@ -1,4 +1,5 @@
-import { supabase, hasSupabaseConfig } from '@/lib/supabaseClient'
+import { db, hasFirebaseConfig } from '@/lib/firebaseClient'
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, query, where, orderBy, getDoc, writeBatch } from 'firebase/firestore'
 
 function parseSort(sort) {
   if (!sort) return { column: 'id', ascending: true }
@@ -7,24 +8,51 @@ function parseSort(sort) {
   return { column, ascending: !descending }
 }
 
-async function list(table, sort) {
-  if (!hasSupabaseConfig) return []
+async function list(tableName, sortStr) {
+  if (!hasFirebaseConfig) return []
   try {
-    const { column, ascending } = parseSort(sort)
-    const { data, error } = await supabase.from(table).select('*').order(column, { ascending })
-    if (error) throw error
-    return data || []
+    const { column, ascending } = parseSort(sortStr)
+    const q = query(collection(db, tableName), orderBy(column, ascending ? 'asc' : 'desc'))
+    const snapshot = await getDocs(q)
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
   } catch (e) {
-    console.error(`Erro ao listar ${table}:`, e?.message || e)
+    if (e.message?.includes('index') || e.message?.includes('requires an index') || e.message?.includes('ORDER BY')) {
+      // fallback if index doesn't exist (happens often with firestore)
+      try {
+        const fallbackQ = query(collection(db, tableName))
+        const fallbackSnap = await getDocs(fallbackQ)
+        let docs = fallbackSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+        docs.sort((a, b) => {
+          if (a[column] < b[column]) return ascending ? -1 : 1;
+          if (a[column] > b[column]) return ascending ? 1 : -1;
+          return 0;
+        })
+        return docs
+      } catch (err2) {
+        console.error(`Erro ao listar ${tableName}:`, err2?.message || err2)
+        return []
+      }
+    }
+    console.error(`Erro ao listar ${tableName}:`, e?.message || e)
     return []
   }
 }
 
-async function create(table, payload) {
-  if (!hasSupabaseConfig) return payload
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+
+async function create(tableName, payload) {
+  if (!hasFirebaseConfig) return payload
   try {
-    let toInsert = payload
-    if (table === 'transacoes') {
+    let toInsert = { ...payload }
+
+    // Add created_at if missing
+    if (!toInsert.created_at) {
+      toInsert.created_at = new Date().toISOString()
+    }
+
+    if (tableName === 'transacoes') {
       const iso = /^\d{4}-\d{2}-\d{2}$/
       const dmy = /^\d{2}\/\d{2}\/\d{4}$/
       const dm = /^\d{2}\/\d{2}$/
@@ -78,7 +106,7 @@ async function create(table, payload) {
         return parseFloat(s) || 0
       }
       toInsert = {
-        ...payload,
+        ...toInsert,
         data: ensureIso(fixDate(payload.data)),
         valor: normMoney(payload.valor),
         parcela_atual: (payload.parcela_atual === null || payload.parcela_atual === undefined) ? null : Number(payload.parcela_atual),
@@ -88,61 +116,59 @@ async function create(table, payload) {
         const pAtual = toInsert.parcela_atual || 0
         toInsert.hash_unico = `${toInsert.data}_${toInsert.valor}_${toInsert.descricao}_${pAtual}`
       }
-      try {
-        const { data, error } = await supabase
-          .from(table)
-          .upsert(toInsert, { onConflict: 'hash_unico', ignoreDuplicates: true })
-          .select()
-          .maybeSingle()
-        if (error) throw error
-        return data || toInsert
-      } catch (err) {
-        if (err?.code === '42P10') {
-          const { data: existing } = await supabase.from(table).select('*').eq('hash_unico', toInsert.hash_unico).maybeSingle()
-          if (existing) return existing
-          const { data, error } = await supabase.from(table).insert(toInsert).select().single()
-          if (error) throw error
-          return data
-        }
-        throw err
+
+      // upsert logic for hash_unico
+      const q = query(collection(db, tableName), where("hash_unico", "==", toInsert.hash_unico))
+      const existing = await getDocs(q)
+      if (!existing.empty) {
+        const docToUpdate = existing.docs[0]
+        return { id: docToUpdate.id, ...docToUpdate.data() }
       }
-    } else {
-      if (table === 'faturas') {
-        // Faturas usa mes_referencia como PK, então create deve ser um upsert
-        const { data, error } = await supabase.from(table).upsert(toInsert).select().single()
-        if (error) throw error
-        return data
-      }
-      const { data, error } = await supabase.from(table).insert(toInsert).select().single()
-      if (error) throw error
-      return data
+    } else if (tableName === 'faturas') {
+      // Faturas usa mes_referencia como PK
+      const d = doc(db, tableName, toInsert.mes_referencia)
+      await setDoc(d, toInsert, { merge: true })
+      return { id: toInsert.mes_referencia, ...toInsert }
+    } else if (tableName === 'fechamentos') {
+      // Fechamentos usa mes e usuario
+      const d_id = `${toInsert.mes}_${toInsert.usuario}`
+      const d = doc(db, tableName, d_id)
+      await setDoc(d, toInsert, { merge: true })
+      return { id: d_id, ...toInsert }
     }
+
+    // Default insert
+    const insertId = generateId()
+    const d = doc(db, tableName, insertId)
+    await setDoc(d, toInsert)
+    return { id: insertId, ...toInsert }
   } catch (e) {
-    console.error(`Erro ao criar em ${table}:`, e?.message || e)
+    console.error(`Erro ao criar em ${tableName}:`, e?.message || e)
     throw e
   }
 }
 
-async function update(table, id, payload) {
-  if (!hasSupabaseConfig) return { id, ...payload }
+async function update(tableName, id, payload) {
+  if (!hasFirebaseConfig) return { id, ...payload }
   try {
-    const { data, error } = await supabase.from(table).update(payload).eq('id', id).select().maybeSingle()
-    if (error) throw error
-    return data
+    const d = doc(db, tableName, String(id))
+    await updateDoc(d, payload)
+    const after = await getDoc(d)
+    return { id: after.id, ...after.data() }
   } catch (e) {
-    console.error(`Erro ao atualizar ${table}:${id}:`, e?.message || e)
+    console.error(`Erro ao atualizar ${tableName}:${id}:`, e?.message || e)
     throw e
   }
 }
 
-async function remove(table, id) {
-  if (!hasSupabaseConfig) return true
+async function remove(tableName, id) {
+  if (!hasFirebaseConfig) return true
   try {
-    const { error } = await supabase.from(table).delete().eq('id', id)
-    if (error) throw error
+    const d = doc(db, tableName, String(id))
+    await deleteDoc(d)
     return true
   } catch (e) {
-    console.error(`Erro ao deletar ${table}:${id}:`, e?.message || e)
+    console.error(`Erro ao deletar ${tableName}:${id}:`, e?.message || e)
     throw e
   }
 }
@@ -155,20 +181,30 @@ export const base44 = {
       update: (id, payload) => update('transacoes', id, payload),
       delete: (id) => remove('transacoes', id),
       deleteByMonth: async (mes, arquivo_nome) => {
-        if (!hasSupabaseConfig) return true
-        let query = supabase.from('transacoes').delete().eq('fatura_mes_ref', mes)
+        if (!hasFirebaseConfig) return true
+        let conditions = [where('fatura_mes_ref', '==', mes)]
         if (arquivo_nome) {
-          query = query.eq('arquivo_nome', arquivo_nome)
+          conditions.push(where('arquivo_nome', '==', arquivo_nome))
         }
-        const { error } = await query
-        if (error) throw error
+        const q = query(collection(db, 'transacoes'), ...conditions)
+        const snapshot = await getDocs(q)
+
+        const batch = writeBatch(db)
+        snapshot.docs.forEach((doc) => {
+          batch.delete(doc.ref)
+        })
+        await batch.commit()
         return true
       },
       updateMany: async (ids, payload) => {
-        if (!hasSupabaseConfig) return payload
-        const { data, error } = await supabase.from('transacoes').update(payload).in('id', ids).select()
-        if (error) throw error
-        return data
+        if (!hasFirebaseConfig || !ids || ids.length === 0) return payload
+        const batch = writeBatch(db)
+        ids.forEach(id => {
+          const dRef = doc(db, 'transacoes', String(id))
+          batch.update(dRef, payload)
+        })
+        await batch.commit()
+        return payload
       }
     },
     Pagamento: {

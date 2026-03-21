@@ -58,6 +58,11 @@ export default function Dashboard() {
     queryFn: () => base44.entities.RegraClassificacao.list(),
   });
 
+  const { data: fechamentos = [] } = useQuery({
+    queryKey: ["fechamentos"],
+    queryFn: () => base44.entities.Fechamento.list(),
+  });
+
   const createTransacao = useMutation({
     mutationFn: (data) => base44.entities.Transacao.create(data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["transacoes"] }),
@@ -194,9 +199,15 @@ export default function Dashboard() {
 
   const parcelasAbertasTodas = useMemo(() => {
     // Usa transacoesMes para garantir que olhamos apenas o "snapshot" da dívida no mês selecionado
-    const all = transacoesMes.filter(t => (t.parcela_total || 0) > 0 && (t.parcela_atual || 0) > 0 && t.parcela_atual < t.parcela_total)
+    const all = transacoesMes.filter(t => (t.parcela_total || 0) > 0 && (t.parcela_atual || 0) > 0 && t.parcela_atual <= t.parcela_total)
     const seen = new Set()
-    const keyOf = (t) => t.hash_unico || `${t.descricao}_${t.valor}_${t.parcela_total}`
+
+    // Dedup robusto (ignora hash_unico pois cada linha da DB tem o seu próprio hash único)
+    const keyOf = (t) => {
+      const simplify = (s) => String(s).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+      return `${simplify(t.descricao)}_${Math.round(t.valor)}_${t.parcela_total}`
+    }
+
     return all.filter(t => {
       const k = keyOf(t)
       if (seen.has(k)) return false
@@ -220,11 +231,8 @@ export default function Dashboard() {
   }
 
   const projecoesParcelas = useMemo(() => {
-    const abertasMesAtual = transacoes
-      .filter(t => t.fatura_mes_ref === mesAtual)
-      .filter(t => (t.parcela_total || 0) > 0 && (t.parcela_atual || 0) > 0 && t.parcela_atual < t.parcela_total)
     const proj = {}
-    abertasMesAtual.forEach(t => {
+    parcelasAbertasTodas.forEach(t => {
       const restantes = t.parcela_total - t.parcela_atual
       for (let i = 1; i <= restantes; i++) {
         const mes = addMonths(mesAtual, i)
@@ -241,17 +249,20 @@ export default function Dashboard() {
       meses.push({ mes, ...(proj[mes] || { eu: 0, dinda: 0, total: 0 }) })
     }
     return meses
-  }, [transacoes, mesAtual])
+  }, [parcelasAbertasTodas, mesAtual])
 
   const projecoesParcelasPorMes = useMemo(() => {
     const out = {}
-    transacoes.forEach(t => {
+    // Filtramos para projetar apenas as originais, evitando multiplicar projeções existentes na DB
+    const originais = transacoes.filter(t => !t.hash_unico?.startsWith('PROJ_'))
+    originais.forEach(t => {
       const total = t.parcela_total || 0
       const atual = t.parcela_atual || 0
-      if (total > 0 && atual > 0) {
-        for (let i = 1; i <= total; i++) {
-          const delta = i - atual
-          const mes = addMonths(t.fatura_mes_ref, delta)
+      if (total > 0 && atual > 0 && atual <= total) {
+        const restantes = total - atual
+        // Projetamos SOMENTE as parcelas futuras que se seguem a 'atual'
+        for (let i = 1; i <= restantes; i++) {
+          const mes = addMonths(t.fatura_mes_ref, i)
           if (!out[mes]) out[mes] = { eu: 0, dinda: 0, total: 0 }
           const v = t.valor || 0
           if (t.dono === 'eu') out[mes].eu += v
@@ -323,7 +334,13 @@ export default function Dashboard() {
 
     // --- CÁLCULOS DO MÊS ATUAL ---
     const seen = new Set()
-    const keyOf = (t) => t.hash_unico || `${t.data}_${t.valor}_${t.descricao}`
+    const keyOf = (t) => {
+      // Para parceladas, deduplica ignorando o hash gerado com a data da fatura anterior
+      if (t.parcela_atual != null && (t.hash_unico || '').startsWith('PROJ_')) {
+        return `PROJ_${t.fatura_mes_ref}_${Number(t.valor).toFixed(2)}_${t.parcela_atual}`;
+      }
+      return t.hash_unico || `${t.data}_${t.valor}_${t.descricao}`
+    }
     const uniq = transacoesMes.filter(t => {
       const k = keyOf(t)
       if (seen.has(k)) return false
@@ -624,8 +641,9 @@ export default function Dashboard() {
           const nextMesRef = `${nextAno}-${nextMes}`;
 
           const nextParcela = tInst.parcela_atual + i;
-          // Hash determinístico para a projeção
-          const hashProj = `PROJ_${tInst.data}_${tInst.valor}_${nextParcela}_of_${tInst.parcela_total}`;
+          // Hash determinístico para a projeção (removemos a data, que varia se você mudar a origem)
+          const safeDesc = String(tInst.descricao || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+          const hashProj = `PROJ_${nextMesRef}_${safeDesc}_${tInst.valor}_${nextParcela}_of_${tInst.parcela_total}`;
 
           await createTransacao.mutateAsync({
             data: nextDate.toISOString().split('T')[0],
@@ -766,7 +784,8 @@ export default function Dashboard() {
   const isLoading = loadingTransacoes || loadingPagamentos || loadingSaques;
 
   const handleSanitize = async () => {
-    const future = transacoes.filter(t => t.fatura_mes_ref > mesAtual);
+    // Agora varre e limpa TODAS as transações, e não apenas > mesAtual
+    const future = transacoes;
     const groups = {};
     future.forEach(t => {
       // Apenas parcelados são relevantes para projeção futura duplicada
@@ -841,7 +860,8 @@ export default function Dashboard() {
         }
 
         // Se não existe, cria!
-        const hashProj = `PROJ_${t.data}_${t.valor}_${nextParcela}_of_${t.parcela_total}`;
+        const safeDesc = String(t.descricao || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+        const hashProj = `PROJ_${nextMesRef}_${safeDesc}_${t.valor}_${nextParcela}_of_${t.parcela_total}`;
 
         await createTransacao.mutateAsync({
           data: nextDate.toISOString().split('T')[0],
@@ -883,7 +903,7 @@ export default function Dashboard() {
       <div className="max-w-6xl mx-auto px-4 py-8">
         {(!isLoading && transacoes.length === 0 && pagamentos.length === 0 && saques.length === 0 && fechamentos.length === 0) && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800">
-            Supabase sem dados ou tabelas ausentes. Execute o SQL em supabase/schema.sql e recarregue.
+            Banco de dados vazio. Importe uma fatura para começar.
           </div>
         )}
         <motion.div
