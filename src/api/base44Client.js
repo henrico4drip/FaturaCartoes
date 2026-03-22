@@ -9,32 +9,35 @@ function parseSort(sort) {
 }
 
 async function list(tableName, sortStr) {
-  if (!hasFirebaseConfig) return []
+  if (!hasFirebaseConfig) {
+    console.warn(`[Firebase] Chaves de configuração ausentes para listar ${tableName}`);
+    return [];
+  }
   try {
-    const { column, ascending } = parseSort(sortStr)
-    const q = query(collection(db, tableName), orderBy(column, ascending ? 'asc' : 'desc'))
-    const snapshot = await getDocs(q)
-    return snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+    const { column, ascending } = parseSort(sortStr);
+    const q = query(collection(db, tableName), orderBy(column, ascending ? 'asc' : 'desc'));
+    console.log(`[Firebase] Solicitando listagem: ${tableName} (sort: ${sortStr})`);
+    const snapshot = await getDocs(q);
+    console.log(`[Firebase] Sucesso: ${snapshot.size} itens em ${tableName}`);
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) {
-    if (e.message?.includes('index') || e.message?.includes('requires an index') || e.message?.includes('ORDER BY')) {
-      // fallback if index doesn't exist (happens often with firestore)
-      try {
-        const fallbackQ = query(collection(db, tableName))
-        const fallbackSnap = await getDocs(fallbackQ)
-        let docs = fallbackSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-        docs.sort((a, b) => {
-          if (a[column] < b[column]) return ascending ? -1 : 1;
-          if (a[column] > b[column]) return ascending ? 1 : -1;
-          return 0;
-        })
-        return docs
-      } catch (err2) {
-        console.error(`Erro ao listar ${tableName}:`, err2?.message || err2)
-        return []
-      }
+    console.warn(`[Firebase] Erro na consulta ordenada de ${tableName}, tentando fallback:`, e.message);
+    try {
+      const fallbackQ = query(collection(db, tableName));
+      const fallbackSnap = await getDocs(fallbackQ);
+      console.log(`[Firebase] Sucesso Fallback: ${fallbackSnap.size} itens em ${tableName}`);
+      let docs = fallbackSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const { column, ascending } = parseSort(sortStr);
+      docs.sort((a, b) => {
+        if (a[column] < b[column]) return ascending ? -1 : 1;
+        if (a[column] > b[column]) return ascending ? 1 : -1;
+        return 0;
+      });
+      return docs;
+    } catch (err2) {
+      console.error(`[Firebase] Falha crítica ao listar ${tableName}:`, err2?.message || err2);
+      return [];
     }
-    console.error(`Erro ao listar ${tableName}:`, e?.message || e)
-    return []
   }
 }
 
@@ -181,30 +184,40 @@ export const base44 = {
       update: (id, payload) => update('transacoes', id, payload),
       delete: (id) => remove('transacoes', id),
       deleteByMonth: async (mes, arquivo_nome) => {
-        if (!hasFirebaseConfig) return true
-        let conditions = [where('fatura_mes_ref', '==', mes)]
-        if (arquivo_nome) {
-          conditions.push(where('arquivo_nome', '==', arquivo_nome))
-        }
-        const q = query(collection(db, 'transacoes'), ...conditions)
-        const snapshot = await getDocs(q)
+        if (!hasFirebaseConfig) return true;
+        try {
+          let conditions = [where('fatura_mes_ref', '==', mes)];
+          if (arquivo_nome) {
+            conditions.push(where('arquivo_nome', '==', arquivo_nome));
+          }
+          const q = query(collection(db, 'transacoes'), ...conditions);
+          const snapshot = await getDocs(q);
 
-        const batch = writeBatch(db)
-        snapshot.docs.forEach((doc) => {
-          batch.delete(doc.ref)
-        })
-        await batch.commit()
-        return true
+          const batch = writeBatch(db);
+          snapshot.docs.forEach((doc) => {
+            batch.delete(doc.ref);
+          });
+          await batch.commit();
+          return true;
+        } catch (e) {
+          console.error("Erro ao deletar por mês:", e);
+          throw e;
+        }
       },
       updateMany: async (ids, payload) => {
-        if (!hasFirebaseConfig || !ids || ids.length === 0) return payload
-        const batch = writeBatch(db)
-        ids.forEach(id => {
-          const dRef = doc(db, 'transacoes', String(id))
-          batch.update(dRef, payload)
-        })
-        await batch.commit()
-        return payload
+        if (!hasFirebaseConfig || !ids || ids.length === 0) return payload;
+        try {
+          const batch = writeBatch(db);
+          ids.forEach(id => {
+            const dRef = doc(db, 'transacoes', String(id));
+            batch.update(dRef, payload);
+          });
+          await batch.commit();
+          return payload;
+        } catch (e) {
+          console.error("Erro ao atualizar lote:", e);
+          throw e;
+        }
       }
     },
     Pagamento: {
